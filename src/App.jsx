@@ -752,41 +752,182 @@ function Collection({ cards, setCards, liveData, fetchAndStore, userId }) {
 // ─────────────────────────────────────────────
 function PriceChecker() {
   const [query,setQuery]=useState("");
-  const [results,setResults]=useState([]); const [loading,setLoading]=useState(false); const [searched,setSearched]=useState(false); const [selected,setSelected]=useState(null);
+  const [results,setResults]=useState([]); const [loading,setLoading]=useState(false); const [searched,setSearched]=useState(false); const [selected,setSelected]=useState(null); const [priceData,setPriceData]=useState(null);
   const IS={ width:"100%",background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:10,color:"#f9fafb",padding:"11px 36px 11px 40px",fontFamily:"inherit",fontSize:14,outline:"none" };
-  async function handleSearch(e){ e.preventDefault(); if(!query.trim())return; setLoading(true);setSearched(true);setResults([]);setSelected(null); const res=await searchCardPrice(query); setResults(res||[]); setLoading(false); }
+
+  async function handleSearch(e) {
+    e.preventDefault(); if(!query.trim())return;
+    setLoading(true); setSearched(true); setResults([]); setSelected(null); setPriceData(null);
+    const [ebayItems, pokemonResult, scryfallResult] = await Promise.all([
+      searchCardPrice(query),
+      (async()=>{ try {
+        const q=encodeURIComponent(`name:"${query}"`);
+        const res=await fetch(`https://api.pokemontcg.io/v2/cards?q=${q}&pageSize=1`);
+        const data=await res.json(); const card=data.data?.[0]; if(!card)return null;
+        const prices=card.tcgplayer?.prices;
+        const market=prices?.holoRare?.market||prices?.normal?.market||prices?.["1stEditionHolofoil"]?.market||prices?.reverseHolofoil?.market||Object.values(prices||{})[0]?.market;
+        return market?{ value:market,name:card.name,set:card.set?.name,image:card.images?.small }:null;
+      } catch { return null; } })(),
+      (async()=>{ try {
+        const q=encodeURIComponent(query);
+        const res=await fetch(`https://api.scryfall.com/cards/search?q=${q}&order=usd&limit=1`);
+        const data=await res.json(); const card=data.data?.[0]; if(!card)return null;
+        const value=parseFloat(card.prices?.usd||card.prices?.usd_foil||0);
+        return value?{ value,name:card.name,set:card.set_name,image:card.image_uris?.small||card.card_faces?.[0]?.image_uris?.small }:null;
+      } catch { return null; } })(),
+    ]);
+    const items=ebayItems||[]; setResults(items);
+    const prices=items.map(i=>i.value).filter(v=>v>0).sort((a,b)=>a-b);
+    let stats=null;
+    if(prices.length>0){
+      const low=prices[Math.floor(prices.length*0.1)]??prices[0];
+      const high=prices[Math.floor(prices.length*0.9)]??prices[prices.length-1];
+      const mid=Math.floor(prices.length/2);
+      const median=prices.length%2===0?(prices[mid-1]+prices[mid])/2:prices[mid];
+      const bucketCount=6; const range=prices[prices.length-1]-prices[0]; const bucketSize=range/bucketCount||1;
+      const buckets=Array(bucketCount).fill(0).map((_,i)=>({ min:prices[0]+i*bucketSize,max:prices[0]+(i+1)*bucketSize,count:0 }));
+      prices.forEach(p=>{ const idx=Math.min(Math.floor((p-prices[0])/bucketSize),bucketCount-1); buckets[idx].count++; });
+      stats={ low,high,median,count:prices.length,min:prices[0],max:prices[prices.length-1],buckets };
+    }
+    const sources=[];
+    if(stats)sources.push({ label:"eBay",value:stats.median,weight:0.5,color:"#f59e0b" });
+    if(pokemonResult)sources.push({ label:"TCGPlayer",value:pokemonResult.value,weight:0.3,color:"#3b82f6" });
+    if(scryfallResult)sources.push({ label:"Scryfall",value:scryfallResult.value,weight:0.2,color:"#10b981" });
+    const totalWeight=sources.reduce((s,src)=>s+src.weight,0);
+    const estimate=sources.length>0?sources.reduce((s,src)=>s+src.value*(src.weight/totalWeight),0):null;
+    setPriceData({ stats,tcgplayer:pokemonResult,scryfall:scryfallResult,sources,estimate });
+    setLoading(false);
+  }
+
   function formatDate(dateStr){ if(!dateStr)return null; const d=new Date(dateStr); return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); }
   const guide=[{ grade:"PSA 10 / BGS 10",mult:"5–20×",color:"#10b981" },{ grade:"PSA 9 / BGS 9.5",mult:"2–5×",color:"#34d399" },{ grade:"PSA 8 / BGS 9",mult:"1.2–2×",color:"#f59e0b" },{ grade:"PSA 7 / BGS 8.5",mult:"0.8–1.2×",color:"#f87171" },{ grade:"Raw NM",mult:"Baseline (1×)",color:"#818cf8" }];
+
   return (
     <div className="slide-in">
-      <div style={{ marginBottom:28 }}><h1 style={{ fontSize:26,fontWeight:700,letterSpacing:-0.5,marginBottom:4 }}>Price Checker</h1><p style={{ fontSize:14,color:"#6b7280" }}>Search real-time eBay listings.</p></div>
+      <div style={{ marginBottom:28 }}><h1 style={{ fontSize:26,fontWeight:700,letterSpacing:-0.5,marginBottom:4 }}>Price Checker</h1><p style={{ fontSize:14,color:"#6b7280" }}>Multi-source market analysis — eBay, TCGPlayer & Scryfall.</p></div>
+
+      {/* Search */}
       <div style={{ background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:20,padding:"28px",marginBottom:24 }}>
         <form onSubmit={handleSearch} style={{ display:"flex",gap:12,flexWrap:"wrap" }}>
           <div style={{ flex:1,minWidth:200,position:"relative" }}>
             <svg style={{ position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",width:15,height:15,color:"#6b7280" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
             <input className="input-field" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search any card…" style={IS}/>
-            {query&&<button type="button" onClick={()=>{setQuery("");setResults([]);setSearched(false);setSelected(null);}} style={{ position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:15,lineHeight:1,padding:4 }}>✕</button>}
+            {query&&<button type="button" onClick={()=>{setQuery("");setResults([]);setSearched(false);setSelected(null);setPriceData(null);}} style={{ position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:15,lineHeight:1,padding:4 }}>✕</button>}
           </div>
           <button type="submit" className="btn-primary" style={{ background:"linear-gradient(135deg,#8b5cf6,#7c3aed)",color:"#fff",border:"none",borderRadius:12,padding:"11px 24px",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer",boxShadow:"0 4px 15px rgba(139,92,246,0.3)",whiteSpace:"nowrap" }}>Search</button>
         </form>
       </div>
-      {loading&&<div style={{ textAlign:"center",padding:"60px 0" }}><span className="spin" style={{ fontSize:32 }}>⟳</span><div style={{ fontSize:14,color:"#6b7280",marginTop:16 }}>Fetching live listings…</div></div>}
-      {!loading&&searched&&results.length===0&&<div style={{ textAlign:"center",padding:"60px 0" }}><div style={{ fontSize:36,marginBottom:12 }}>🔍</div><div style={{ fontSize:15,fontWeight:600,color:"#6b7280" }}>No results found</div></div>}
-      {results.length>0&&<div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12,marginBottom:28 }}>
-        {results.map((r,i)=>(
-          <div key={i} className="price-result fade-up" onClick={()=>setSelected(selected===r?null:r)} style={{ background:selected===r?"rgba(139,92,246,0.08)":"rgba(255,255,255,0.03)",border:selected===r?"1px solid rgba(139,92,246,0.35)":"1px solid rgba(255,255,255,0.08)",borderRadius:14,padding:14,animationDelay:`${i*0.05}s` }}>
-            <div style={{ display:"flex",gap:10,marginBottom:10 }}>
-              {r.image&&<img src={r.image} alt={r.name} style={{ width:48,height:64,objectFit:"cover",borderRadius:6,flexShrink:0 }}/>}
-              <div style={{ minWidth:0 }}>
-                <div style={{ fontSize:13,fontWeight:700,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{r.name}</div>
-                <div style={{ fontSize:10,color:"#6b7280",marginBottom:3 }}>{r.set}</div>
-                {r.listedDate&&<div style={{ fontSize:10,color:"#4b5563" }}>Listed {formatDate(r.listedDate)}</div>}
+
+      {loading&&<div style={{ textAlign:"center",padding:"60px 0" }}><span className="spin" style={{ fontSize:32 }}>⟳</span><div style={{ fontSize:14,color:"#6b7280",marginTop:16 }}>Fetching prices from eBay, TCGPlayer & Scryfall…</div></div>}
+      {!loading&&searched&&results.length===0&&!priceData?.estimate&&<div style={{ textAlign:"center",padding:"60px 0" }}><div style={{ fontSize:36,marginBottom:12 }}>🔍</div><div style={{ fontSize:15,fontWeight:600,color:"#6b7280" }}>No results found</div></div>}
+
+      {/* Market Estimate */}
+      {!loading&&priceData?.estimate&&(
+        <div style={{ marginBottom:24 }}>
+          <div style={{ background:"linear-gradient(135deg,rgba(139,92,246,0.1),rgba(99,102,241,0.05))",border:"1px solid rgba(139,92,246,0.25)",borderRadius:20,padding:"24px",marginBottom:14 }}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16,marginBottom:20 }}>
+              <div>
+                <div style={{ fontSize:11,fontWeight:700,color:"#8b5cf6",letterSpacing:1,marginBottom:6 }}>ESTIMATED MARKET VALUE</div>
+                <div style={{ fontSize:46,fontWeight:700,letterSpacing:-1.5,color:"#f9fafb",lineHeight:1 }}>${priceData.estimate.toFixed(2)}</div>
+                <div style={{ fontSize:12,color:"#6b7280",marginTop:6 }}>Weighted average across {priceData.sources.length} source{priceData.sources.length!==1?"s":""}</div>
+              </div>
+              <div style={{ display:"flex",flexDirection:"column",gap:8,minWidth:180 }}>
+                {priceData.sources.map(src=>(
+                  <div key={src.label} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:10,padding:"8px 12px",gap:16 }}>
+                    <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+                      <div style={{ width:8,height:8,borderRadius:"50%",background:src.color,flexShrink:0 }}/>
+                      <span style={{ fontSize:12,color:"#9ca3af" }}>{src.label}</span>
+                    </div>
+                    <span style={{ fontSize:13,fontWeight:700,color:"#f9fafb" }}>${src.value.toFixed(2)}</span>
+                  </div>
+                ))}
               </div>
             </div>
-            <div style={{ fontSize:22,fontWeight:700,color:"#a78bfa" }}>${r.value.toLocaleString()}</div>
+            {priceData.stats&&(
+              <div>
+                <div style={{ fontSize:11,color:"#6b7280",marginBottom:8,fontWeight:600 }}>eBay PRICE RANGE · {priceData.stats.count} listings</div>
+                <div style={{ position:"relative",height:8,background:"rgba(255,255,255,0.08)",borderRadius:4,marginBottom:10 }}>
+                  <div style={{ position:"absolute",left:`${((priceData.stats.low-priceData.stats.min)/(priceData.stats.max-priceData.stats.min||1))*100}%`,right:`${(1-(priceData.stats.high-priceData.stats.min)/(priceData.stats.max-priceData.stats.min||1))*100}%`,height:"100%",background:"linear-gradient(90deg,#8b5cf6,#6366f1)",borderRadius:4 }}/>
+                  <div style={{ position:"absolute",left:`${((priceData.stats.median-priceData.stats.min)/(priceData.stats.max-priceData.stats.min||1))*100}%`,transform:"translateX(-50%)",top:-4,width:4,height:16,background:"#fff",borderRadius:2,boxShadow:"0 0 6px rgba(255,255,255,0.6)" }}/>
+                </div>
+                <div style={{ display:"flex",justifyContent:"space-between",fontSize:11,color:"#6b7280" }}>
+                  <span>Low <strong style={{color:"#9ca3af"}}>${priceData.stats.min.toFixed(2)}</strong></span>
+                  <span style={{ color:"#c4b5fd",fontWeight:700 }}>Median ${priceData.stats.median.toFixed(2)}</span>
+                  <span>High <strong style={{color:"#9ca3af"}}>${priceData.stats.max.toFixed(2)}</strong></span>
+                </div>
+              </div>
+            )}
           </div>
-        ))}
-      </div>}
+
+          {/* Price Distribution */}
+          {priceData.stats?.buckets&&(
+            <div style={{ background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:18,padding:"20px",marginBottom:14 }}>
+              <div style={{ fontSize:13,fontWeight:600,color:"#9ca3af",marginBottom:2 }}>📊 Price Distribution</div>
+              <div style={{ fontSize:11,color:"#4b5563",marginBottom:16 }}>eBay listing count by price range</div>
+              <div style={{ display:"flex",alignItems:"flex-end",gap:6,height:90 }}>
+                {priceData.stats.buckets.map((b,i)=>{
+                  const maxCount=Math.max(...priceData.stats.buckets.map(x=>x.count),1);
+                  const pct=b.count/maxCount;
+                  return (
+                    <div key={i} style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
+                      <div style={{ fontSize:9,color:"#6b7280",minHeight:12 }}>{b.count>0?b.count:""}</div>
+                      <div style={{ width:"100%",height:`${Math.max(pct*64,b.count>0?4:0)}px`,background:"linear-gradient(180deg,#8b5cf6,#6366f1)",borderRadius:"3px 3px 0 0",opacity:0.35+pct*0.65 }}/>
+                      <div style={{ fontSize:9,color:"#4b5563",textAlign:"center" }}>${Math.round(b.min)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* TCGPlayer / Scryfall result cards */}
+          {(priceData.tcgplayer||priceData.scryfall)&&(
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12,marginBottom:14 }}>
+              {priceData.tcgplayer&&(
+                <div style={{ background:"rgba(59,130,246,0.06)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:14,padding:14 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:10 }}><div style={{ width:8,height:8,borderRadius:"50%",background:"#3b82f6" }}/><span style={{ fontSize:11,fontWeight:700,color:"#60a5fa" }}>TCGPlayer</span></div>
+                  <div style={{ display:"flex",gap:10,alignItems:"center" }}>
+                    {priceData.tcgplayer.image&&<img src={priceData.tcgplayer.image} alt="" style={{ width:40,height:56,objectFit:"cover",borderRadius:5,flexShrink:0 }}/>}
+                    <div><div style={{ fontSize:12,fontWeight:700,marginBottom:2,color:"#f9fafb" }}>{priceData.tcgplayer.name}</div><div style={{ fontSize:10,color:"#6b7280",marginBottom:6 }}>{priceData.tcgplayer.set}</div><div style={{ fontSize:20,fontWeight:700,color:"#60a5fa" }}>${priceData.tcgplayer.value.toFixed(2)}</div></div>
+                  </div>
+                </div>
+              )}
+              {priceData.scryfall&&(
+                <div style={{ background:"rgba(16,185,129,0.06)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:14,padding:14 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:10 }}><div style={{ width:8,height:8,borderRadius:"50%",background:"#10b981" }}/><span style={{ fontSize:11,fontWeight:700,color:"#34d399" }}>Scryfall (MTG)</span></div>
+                  <div style={{ display:"flex",gap:10,alignItems:"center" }}>
+                    {priceData.scryfall.image&&<img src={priceData.scryfall.image} alt="" style={{ width:40,height:56,objectFit:"cover",borderRadius:5,flexShrink:0 }}/>}
+                    <div><div style={{ fontSize:12,fontWeight:700,marginBottom:2,color:"#f9fafb" }}>{priceData.scryfall.name}</div><div style={{ fontSize:10,color:"#6b7280",marginBottom:6 }}>{priceData.scryfall.set}</div><div style={{ fontSize:20,fontWeight:700,color:"#34d399" }}>${priceData.scryfall.value.toFixed(2)}</div></div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* eBay Listings */}
+      {results.length>0&&(
+        <div style={{ marginBottom:24 }}>
+          <div style={{ fontSize:13,fontWeight:600,color:"#9ca3af",marginBottom:12 }}>🏷️ eBay Listings ({results.length})</div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12 }}>
+            {results.map((r,i)=>(
+              <div key={i} className="price-result fade-up" onClick={()=>setSelected(selected===r?null:r)} style={{ background:selected===r?"rgba(139,92,246,0.08)":"rgba(255,255,255,0.03)",border:selected===r?"1px solid rgba(139,92,246,0.35)":"1px solid rgba(255,255,255,0.08)",borderRadius:14,padding:14,animationDelay:`${i*0.05}s`,cursor:"pointer" }}>
+                <div style={{ display:"flex",gap:10,marginBottom:10 }}>
+                  {r.image&&<img src={r.image} alt={r.name} style={{ width:48,height:64,objectFit:"cover",borderRadius:6,flexShrink:0 }}/>}
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ fontSize:13,fontWeight:700,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{r.name}</div>
+                    <div style={{ fontSize:10,color:"#6b7280",marginBottom:3 }}>{r.set}</div>
+                    {r.listedDate&&<div style={{ fontSize:10,color:"#4b5563" }}>Listed {formatDate(r.listedDate)}</div>}
+                  </div>
+                </div>
+                <div style={{ fontSize:22,fontWeight:700,color:"#a78bfa" }}>${r.value.toLocaleString()}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Grading Estimator */}
       <div style={{ background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:18,padding:"22px" }}>
         <div style={{ fontSize:13,fontWeight:600,color:"#9ca3af",marginBottom:4 }}>🏆 Grading Estimator</div>
@@ -797,6 +938,17 @@ function PriceChecker() {
             <span style={{ fontSize:13,fontWeight:700,color }}>{mult}</span>
           </div>
         ))}
+        {priceData?.estimate&&(
+          <div style={{ marginTop:16,paddingTop:16,borderTop:"1px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ fontSize:11,color:"#6b7280",marginBottom:10 }}>Dollar estimates for this card:</div>
+            {[["PSA 10",10],["PSA 9",3],["PSA 8",1.5],["Raw NM",1]].map(([g,m])=>(
+              <div key={g} style={{ display:"flex",justifyContent:"space-between",fontSize:12,padding:"7px 0",borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
+                <span style={{color:"#9ca3af"}}>{g}</span>
+                <span style={{fontWeight:600,color:"#c4b5fd"}}>~${Math.round(priceData.estimate*m).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Listing Detail Modal */}
