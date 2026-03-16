@@ -221,7 +221,7 @@ function AuthScreen({ onAuth }) {
         setSuccess("Account created! Check your email to confirm, then sign in.");
         setMode("login");
       } else if (mode==="forgot") {
-        const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+        const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: "https://card-vault-roan.vercel.app" });
         if (error) throw error;
         setSuccess("Password reset email sent! Check your inbox for a link to reset your password.");
       } else {
