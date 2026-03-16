@@ -1159,8 +1159,24 @@ export default function App() {
   }
 
   useEffect(()=>{
-    sb.auth.getSession().then(({ data:{ session } })=>{ if(session?.user){ setUser(session.user); loadUserData(session.user.id); } else setLoading(false); });
-    const { data:{ subscription } }=sb.auth.onAuthStateChange((event,session)=>{ if(event==="PASSWORD_RECOVERY"){ setResetMode(true); setLoading(false); } else if(session?.user){ setUser(session.user); loadUserData(session.user.id); } else { setUser(null);setProfile(null);setCards([]);setLoading(false); } });
+    const params=new URLSearchParams(window.location.search);
+    const hasCode=params.has("code");
+    const hasRecovery=window.location.hash.includes("type=recovery");
+    // If there's a recovery code in the URL, skip getSession and wait for onAuthStateChange
+    if(!hasCode&&!hasRecovery){
+      sb.auth.getSession().then(({ data:{ session } })=>{ if(session?.user){ setUser(session.user); loadUserData(session.user.id); } else setLoading(false); });
+    }
+    const { data:{ subscription } }=sb.auth.onAuthStateChange((event,session)=>{
+      if(event==="PASSWORD_RECOVERY"){
+        setResetMode(true); setLoading(false);
+        // Clean the code out of the URL so a refresh doesn't re-trigger this
+        window.history.replaceState({},"",window.location.pathname);
+      } else if(session?.user){
+        setResetMode(false); setUser(session.user); loadUserData(session.user.id);
+      } else {
+        setUser(null);setProfile(null);setCards([]);setLoading(false);
+      }
+    });
     return ()=>subscription.unsubscribe();
   },[]);
 
